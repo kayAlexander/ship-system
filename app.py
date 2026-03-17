@@ -218,7 +218,7 @@ def login_module():
     pwd = st.text_input("输入密码", type="password", key="login_pwd")
     
     # 🔐 公网强密码（你可以后续自己改，现在先按这个来）
-    SHIP_PWD = "Ship@2026#888"  # 船方密码（复杂且安全）
+    SHIP_PWD = "Ship@20260315"  # 船方密码（复杂且安全）
     ADMIN_PWD = "Admin@2026#123" # 管理员密码
     
     if st.button("登录", key="login_btn", use_container_width=True):
