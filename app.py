@@ -8,19 +8,18 @@ from filelock import FileLock
 from dotenv import load_dotenv
 import uuid
 import time
+import json
 
 # ====================== 基础配置 ======================
 load_dotenv()
 
-# 适配手机显示
 st.set_page_config(
     page_title="🚢 船舶航次审批系统",
-    layout="centered",  # 适配手机
+    layout="centered",
     initial_sidebar_state="collapsed",
     page_icon="🚢"
 )
 
-# 加密配置
 ENCRYPT_SALT = os.getenv("ENCRYPT_SALT", "ship_approval_2026")
 
 # 船舶固定信息
@@ -37,67 +36,73 @@ DATA_DIR = "ship_data"
 DATA_FILES = {
     "ship_info": os.path.join(DATA_DIR, "ship_info.csv"),
     "crew_info": os.path.join(DATA_DIR, "crew_info.csv"),
-    "check_info": os.path.join(DATA_DIR, "check_info.csv"),  # 新增检查项存储文件
+    "check_info": os.path.join(DATA_DIR, "check_info.csv"),
     "approval_info": os.path.join(DATA_DIR, "approval_info.csv"),
-    "first_sea_info": os.path.join(DATA_DIR, "first_sea_info.csv")
+    "first_sea_info": os.path.join(DATA_DIR, "first_sea_info.csv"),
+    "photo_records": os.path.join(DATA_DIR, "photo_records.json")
 }
 PHOTO_DIR = "ship_photos"
 
 # 无需上传照片的检查项
 NO_PHOTO_ITEMS = [
-    "船舶证书有效性", "消防设备", "救生设备", 
+    "船舶证书有效性", "消防设备", "救生设备",
     "油水储备", "应急演练记录", "天气海况确认"
 ]
 
-# 所有检查项列表（统一管理）
+# 所有检查项（含新增：是否已完成人员上船登记）
 ALL_CHECK_ITEMS = [
     "船舶证书有效性", "船员证书有效性", "通讯设备", "消防设备", "救生设备",
     "航行设备", "动力设备", "油水储备", "货物绑扎", "乘员安全帽救生衣情况",
-    "应急演练记录", "天气海况确认", "是否有人穿戴拖鞋", "是否有人第一次出海"
+    "应急演练记录", "天气海况确认", "是否有人穿戴拖鞋", "是否有人第一次出海",
+    "是否已完成人员上船登记"
 ]
 
-# ====================== 初始化函数 ======================
+# ====================== 初始化 ======================
 def init_files():
-    # 初始化船员主名单
     os.makedirs(CREW_BASE_DIR, exist_ok=True)
     if not os.path.exists(CREW_BASE_FILE):
         crew_df = pd.DataFrame({
-            "船名": pd.Series(dtype=str),
-            "船员姓名": pd.Series(dtype=str),
-            "身份证号": pd.Series(dtype=str),
-            "手机号": pd.Series(dtype=str),
-            "是否有效": pd.Series(dtype=bool)
+            "船名": pd.Series(dtype=str), "船员姓名": pd.Series(dtype=str),
+            "身份证号": pd.Series(dtype=str), "手机号": pd.Series(dtype=str), "是否有效": pd.Series(dtype=bool)
         })
         crew_df.to_csv(CREW_BASE_FILE, index=False, encoding="utf-8-sig")
-    
-    # 初始化业务文件
+
     os.makedirs(DATA_DIR, exist_ok=True)
     os.makedirs(PHOTO_DIR, exist_ok=True)
+
     for file_path in DATA_FILES.values():
         if not os.path.exists(file_path):
             if "ship_info" in file_path:
                 df = pd.DataFrame(columns=[
                     "航次编号", "船名", "船籍港", "最大载客人数", "实际载客人数",
-                    "出海任务", "出海携带货物", "拟计划回港时间",
-                    "出发港", "目的港", "开航时间", "提交时间", "审核状态", "审核意见"
+                    "出海任务", "出海携带货物", "拟计划回港时间", "出发港", "目的港",
+                    "开航时间", "提交时间", "审核状态", "审核意见"
                 ])
+                df.to_csv(file_path, index=False, encoding="utf-8-sig")
             elif "crew_info" in file_path:
                 df = pd.DataFrame(columns=["航次编号", "船员姓名", "身份证号", "手机号", "照片路径"])
-            elif "check_info" in file_path:  # 初始化检查项表
+                df.to_csv(file_path, index=False, encoding="utf-8-sig")
+            elif "check_info" in file_path:
                 df = pd.DataFrame(columns=["航次编号", "检查项名称", "检查结果", "照片路径"])
+                df.to_csv(file_path, index=False, encoding="utf-8-sig")
             elif "approval_info" in file_path:
                 df = pd.DataFrame(columns=["航次编号", "审核人", "审核时间", "审核状态", "审核意见"])
+                df.to_csv(file_path, index=False, encoding="utf-8-sig")
             elif "first_sea_info" in file_path:
                 df = pd.DataFrame(columns=["航次编号", "人数", "姓名", "电话", "身份证号"])
-            df.to_csv(file_path, index=False, encoding="utf-8-sig")
+                df.to_csv(file_path, index=False, encoding="utf-8-sig")
+            elif "photo_records" in file_path:
+                # 修复：写入无BOM的UTF-8 JSON
+                with open(file_path, "w", encoding="utf-8") as f:
+                    json.dump({}, f)
 
 init_files()
 
-# ====================== 核心工具函数 ======================
+# ====================== 工具函数 ======================
 def read_csv_with_lock(file_path):
     lock = FileLock(f"{file_path}.lock", timeout=10)
     with lock:
-        time.sleep(0.1)
+        time.sleep(0.05)
         dtype_spec = {}
         if "crew_master_list" in file_path:
             dtype_spec = {"船名": str, "船员姓名": str, "身份证号": str, "手机号": str, "是否有效": bool}
@@ -106,13 +111,12 @@ def read_csv_with_lock(file_path):
 def write_csv_with_lock(df, file_path):
     lock = FileLock(f"{file_path}.lock", timeout=10)
     with lock:
-        time.sleep(0.1)
+        time.sleep(0.05)
         df.to_csv(file_path, index=False, encoding="utf-8-sig")
 
 def encrypt_data(raw_str):
-    if isinstance(raw_str, int):
-        raw_str = str(raw_str)
-    return hashlib.sha256((str(raw_str).strip() + ENCRYPT_SALT).encode()).hexdigest() if raw_str else ""
+    if not raw_str: return ""
+    return hashlib.sha256((str(raw_str).strip() + ENCRYPT_SALT).encode()).hexdigest()
 
 def desensitize_id(id_str):
     """公网版身份证脱敏：只显示前6后4，中间隐藏"""
@@ -134,59 +138,87 @@ def generate_voyage_id():
     seq = len(ship_df[ship_df["航次编号"].str.startswith(f"V{today}", na=False)]) + 1
     return f"V{today}{seq:03d}"
 
-def save_photo(photo_file, voyage_id, item_name):
-    if not photo_file:
-        return None
+# ====================== 多图管理（修复JSON BOM问题） ======================
+def save_photo(photo_file, voyage_id, item_name, photo_type="check"):
+    if not photo_file: return None
     voyage_dir = os.path.join(PHOTO_DIR, voyage_id)
     os.makedirs(voyage_dir, exist_ok=True)
-    file_ext = photo_file.name.split('.')[-1] if '.' in photo_file.name else 'jpg'
-    file_name = f"{item_name}_{uuid.uuid4()}.{file_ext}"
-    photo_path = os.path.join(voyage_dir, file_name)
-    with open(photo_path, "wb") as f:
+    ext = photo_file.name.split('.')[-1] if '.' in photo_file.name else 'jpg'
+    fname = f"{photo_type}_{item_name}_{uuid.uuid4()}.{ext}"
+    path = os.path.join(voyage_dir, fname)
+    with open(path, "wb") as f:
         f.write(photo_file.getbuffer())
-    return photo_path
+    return path
 
-# 船员管理函数
+def save_photo_records(voyage_id, item_name, paths, typ="check"):
+    # 修复：兼容BOM头读取，增加异常捕获
+    with open(DATA_FILES["photo_records"], "r", encoding="utf-8-sig") as f:
+        try:
+            r = json.load(f)
+        except json.decoder.JSONDecodeError:
+            r = {}
+    key = f"{voyage_id}_{typ}_{item_name}"
+    r[key] = paths
+    # 修复：写入无BOM的UTF-8
+    with open(DATA_FILES["photo_records"], "w", encoding="utf-8") as f:
+        json.dump(r, f, ensure_ascii=False, indent=2)
+
+def get_photo_records(voyage_id, item_name, typ="check"):
+    if not os.path.exists(DATA_FILES["photo_records"]):
+        return []
+    # 修复：使用 utf-8-sig 读取，自动去除BOM，增加异常捕获
+    with open(DATA_FILES["photo_records"], "r", encoding="utf-8-sig") as f:
+        try:
+            r = json.load(f)
+        except json.decoder.JSONDecodeError:
+            # 文件损坏时返回空列表
+            return []
+    return r.get(f"{voyage_id}_{typ}_{item_name}", [])
+
+def delete_photo(path, voyage_id, item_name, typ="check"):
+    if os.path.exists(path):
+        os.remove(path)
+    lst = get_photo_records(voyage_id, item_name, typ)
+    if path in lst:
+        lst.remove(path)
+        save_photo_records(voyage_id, item_name, lst, typ)
+    return True
+
+# ====================== 船员管理 ======================
 def get_crew_list(ship_name):
     df = read_csv_with_lock(CREW_BASE_FILE)
     return df[(df["船名"] == ship_name) & (df["是否有效"] == True)].reset_index(drop=True)
 
 def add_crew(ship_name, crew_data):
     df = read_csv_with_lock(CREW_BASE_FILE)
-    new_crews = []
-    for crew in crew_data:
-        name = crew["name"].strip()
-        id_card = crew["id"].strip()
-        phone = crew["phone"].strip()
-        if name and id_card and phone and not ((df["船名"] == ship_name) & (df["身份证号"] == id_card)).any():
-            new_crews.append({
-                "船名": ship_name,
-                "船员姓名": name,
-                "身份证号": id_card,
-                "手机号": phone,
-                "是否有效": True
-            })
-    if new_crews:
-        df = pd.concat([df, pd.DataFrame(new_crews)], ignore_index=True)
+    add = []
+    for c in crew_data:
+        name = c["name"].strip()
+        cid = c["id"].strip()
+        phone = c["phone"].strip()
+        if name and cid and phone and not ((df["船名"] == ship_name) & (df["身份证号"] == cid)).any():
+            add.append({"船名": ship_name, "船员姓名": name, "身份证号": cid, "手机号": phone, "是否有效": True})
+    if add:
+        df = pd.concat([df, pd.DataFrame(add)], ignore_index=True)
         write_csv_with_lock(df, CREW_BASE_FILE)
 
-def delete_crew(ship_name, id_card):
+def delete_crew(ship_name, cid):
     df = read_csv_with_lock(CREW_BASE_FILE)
-    mask = (df["船名"] == ship_name) & (df["身份证号"] == id_card.strip())
+    mask = (df["船名"] == ship_name) & (df["身份证号"] == cid.strip())
     if mask.any():
         df.loc[mask, "是否有效"] = False
         write_csv_with_lock(df, CREW_BASE_FILE)
         return True
     return False
 
-# ====================== 登录模块 ======================
+# ====================== 登录 ======================
 def login_module():
     st.title("🚢 船舶航次审批系统")
     role = st.radio("选择角色", ["船方人员", "后台审批人员"], key="login_role")
     pwd = st.text_input("输入密码", type="password", key="login_pwd")
     
-    # 🔐 公网强密码（可以后续自己改）
-    SHIP_PWD = "Ship@20260315"  # 船方密码
+    # 🔐 公网强密码（你可以后续自己改，现在先按这个来）
+    SHIP_PWD = "Ship@2026#888"  # 船方密码（复杂且安全）
     ADMIN_PWD = "Admin@2026#123" # 管理员密码
     
     if st.button("登录", key="login_btn", use_container_width=True):
@@ -201,598 +233,421 @@ def login_module():
         else:
             st.error("❌ 密码错误，请重新输入")
 
-# ====================== 航次录入模块 ======================
+# ====================== 航次录入 ======================
 def ship_info_input():
     st.subheader("📝 航次信息录入")
-    
-    # 1. 船舶选择
-    ship_name = st.selectbox(
-        "🔍 选择船舶", 
-        list(SHIP_INFO.keys()), 
-        key="ship_name",
-        on_change=lambda: st.session_state.pop("preview_photos", None)
-    )
-    
-    # 强制刷新船舶信息
-    ship_data = SHIP_INFO[ship_name]
-    port = ship_data["船籍港"]
-    max_people = ship_data["最大载客人数"]
-    
-    # 2. 船舶基础信息
-    st.markdown("### 🚢 船舶基础信息")
-    col1, col2 = st.columns(2)
-    with col1:
-        st.text_input(
-            "船籍港", 
-            value=port, 
-            disabled=True, 
-            key=f"port_{ship_name}",
-            help="船舶注册港口"
-        )
-    with col2:
-        st.number_input(
-            "最大载客人数（证书许可）", 
-            value=max_people, 
-            disabled=True, 
-            key=f"max_people_{ship_name}",
-            help="船舶证书许可的最大载客数量"
-        )
-    
-    # 3. 实际载客人数（支持超员，仅提醒）
-    actual_people = st.number_input(
-        "👥 实际载客人数",
-        min_value=1,
-        value=1,
-        key="actual_people",
-        help="可输入超过最大限制的人数，系统仅提醒"
-    )
-    
-    # 超员提醒
-    if actual_people > max_people:
-        st.error(f"⚠️ 警告：实际载客人数（{actual_people}人）已超过证书许可的最大人数（{max_people}人）！")
-    else:
-        st.success(f"✅ 实际载客人数（{actual_people}人）在证书许可范围内")
-    
-    # 4. 航次补充信息
-    st.markdown("### 📋 航次任务信息")
-    col1, col2 = st.columns(2)
-    with col1:
-        departure = st.text_input("出发港", key="departure", placeholder="例如：连云港码头")
-        destination = st.text_input("目的港", key="destination", placeholder="例如：黄海作业区")
-        sail_time = st.datetime_input("计划开航时间", key="sail_time")
-    with col2:
-        task = st.text_input("出海任务", key="task", placeholder="例如：海上作业、物资运输、巡查")
-        cargo = st.text_input("出海携带货物", key="cargo", placeholder="例如：作业设备、生活物资、无")
-        return_time = st.datetime_input("拟计划回港时间", key="return_time")
-    
-    # 5. 船员信息管理（带照片预览）
-    st.markdown("### 👨‍✈️ 船员信息管理")
+
+    ship_name = st.selectbox("🔍 选择船舶", list(SHIP_INFO.keys()))
+    port = SHIP_INFO[ship_name]["船籍港"]
+    maxp = SHIP_INFO[ship_name]["最大载客人数"]
+
+    st.markdown("### 🚢 船舶信息")
+    c1, c2 = st.columns(2)
+    with c1: st.text_input("船籍港", value=port, disabled=True)
+    with c2: st.number_input("最大载客", value=maxp, disabled=True)
+
+    actual = st.number_input("👥 实际载客人数", min_value=1)
+    if actual > maxp:
+        st.error(f"⚠️ 已超员：{actual}/{maxp}")
+
+    st.markdown("### 📋 航次信息")
+    c1, c2 = st.columns(2)
+    with c1:
+        dep = st.text_input("出发港")
+        dest = st.text_input("目的港")
+        sail = st.datetime_input("计划开航时间")
+    with c2:
+        task = st.text_input("出海任务")
+        cargo = st.text_input("携带货物")
+        ret = st.datetime_input("计划回港时间")
+
+    # 船员
+    st.markdown("### 👨‍✈️ 船员信息")
     crew_df = get_crew_list(ship_name)
-    crew_data_list = []
-    
-    # 初始化照片预览缓存
     if "preview_photos" not in st.session_state:
-        st.session_state["preview_photos"] = {}
-    
-    # 现有船员管理
+        st.session_state.preview_photos = {}
+
+    crew_list = []
+
     if not crew_df.empty:
-        st.markdown("#### 现有船员（可删除离职人员）")
-        for idx, row in crew_df.iterrows():
-            crew_key = f"crew_{idx}"
-            col1, col2, col3, col4 = st.columns([2, 3, 2, 3])
-            
-            with col1:
-                st.write(f"**{row['船员姓名']}**")
-            with col2:
-                st.write(f"身份证：{desensitize_id(row['身份证号'])}")
-            with col3:
-                st.write(f"手机号：{desensitize_phone(row['手机号'])}")
-            with col4:
-                # 船员照片上传+实时预览
-                photo_file = st.file_uploader(
-                    "上传照片",
-                    type=["jpg", "jpeg", "png"],
-                    key=f"crew_photo_{idx}",
-                    label_visibility="collapsed"
-                )
-                
-                # 照片预览
-                if photo_file:
-                    st.session_state["preview_photos"][crew_key] = photo_file
-                    st.image(
-                        photo_file,
-                        caption=f"{row['船员姓名']} 照片预览",
-                        width=100,
-                        use_column_width=False
-                    )
-                elif crew_key in st.session_state["preview_photos"]:
-                    st.image(
-                        st.session_state["preview_photos"][crew_key],
-                        caption=f"{row['船员姓名']} 照片预览",
-                        width=100,
-                        use_column_width=False
-                    )
-            
-            # 删除按钮
-            if st.button(f"删除 {row['船员姓名']}", key=f"del_crew_{idx}", type="secondary"):
-                if delete_crew(ship_name, row["身份证号"]):
-                    st.success(f"✅ 已删除船员：{row['船员姓名']}")
+        st.markdown("#### 现有船员")
+        for i, row in crew_df.iterrows():
+            name = row["船员姓名"]
+            st.markdown(f"**{name}**")
+            c1, c2, c3 = st.columns(3)
+            with c1: st.write(f"身份证：{desensitize_id(row['身份证号'])}")
+            with c2: st.write(f"手机：{desensitize_phone(row['手机号'])}")
+            with c3:
+                if st.button(f"删除 {name}", key=f"del{i}"):
+                    delete_crew(ship_name, row["身份证号"])
                     st.rerun()
-            
-            # 收集船员数据
-            crew_data_list.append({
-                "name": row["船员姓名"],
-                "id": row["身份证号"],
-                "phone": row["手机号"],
-                "photo": st.session_state["preview_photos"].get(crew_key)
+
+            photos = st.file_uploader(f"上传{name}照片", type=["png","jpg"], accept_multiple_files=True, key=f"cp{i}")
+            paths = []
+            if photos:
+                cols = st.columns(4)
+                for j, p in enumerate(photos):
+                    with cols[j%4]:
+                        st.image(p, width=80)
+                        paths.append(save_photo(p, "temp", name, "crew"))
+
+            exist = get_photo_records("temp", name, "crew")
+            for j, p in enumerate(exist):
+                cols = st.columns(4)
+                with cols[j%4]:
+                    st.image(p, width=80)
+                    if st.button(f"删照片{j+1}", key=f"dc{i}{j}"):
+                        delete_photo(p, "temp", name, "crew")
+                        st.rerun()
+
+            crew_list.append({
+                "name": name, "id": row["身份证号"], "phone": row["手机号"],
+                "photos": paths + exist
             })
-    
-    # 新增船员（带照片预览）
-    st.markdown("#### 添加新船员")
-    if st.checkbox("➕ 新增船员", key="add_crew"):
-        new_count = st.number_input("新增数量", min_value=1, max_value=5, value=1, key="new_crew_count")
-        for i in range(new_count):
-            st.markdown(f"##### 船员{i+1}")
-            col1, col2 = st.columns(2)
-            
-            with col1:
-                new_name = st.text_input("姓名", key=f"new_name_{i}", placeholder="请输入真实姓名")
-                new_id = st.text_input("身份证号", key=f"new_id_{i}", placeholder="18位身份证号")
-            with col2:
-                new_phone = st.text_input("手机号", key=f"new_phone_{i}", placeholder="11位手机号")
-                # 新增船员照片上传+预览
-                new_photo = st.file_uploader(
-                    "上传照片",
-                    type=["jpg", "jpeg", "png"],
-                    key=f"new_photo_{i}",
-                    label_visibility="collapsed"
-                )
-                
-                # 实时预览
-                if new_photo:
-                    st.session_state["preview_photos"][f"new_crew_{i}"] = new_photo
-                    st.image(
-                        new_photo,
-                        caption="照片预览",
-                        width=100,
-                        use_column_width=False
-                    )
-            
-            # 收集新增船员数据
-            if new_name and new_id and new_phone:
-                crew_data_list.append({
-                    "name": new_name,
-                    "id": new_id,
-                    "phone": new_phone,
-                    "photo": st.session_state["preview_photos"].get(f"new_crew_{i}")
+
+    # 新增船员
+    if st.checkbox("➕ 新增船员"):
+        n = st.number_input("数量", 1,5,1)
+        for i in range(n):
+            st.markdown(f"新船员{i+1}")
+            c1,c2 = st.columns(2)
+            with c1:
+                nn = st.text_input("姓名", key=f"nn{i}")
+                cid = st.text_input("身份证", key=f"cid{i}")
+            with c2:
+                phone = st.text_input("手机号", key=f"phone{i}")
+                ps = st.file_uploader("照片", accept_multiple_files=True, key=f"np{i}")
+            ppaths = []
+            if ps:
+                for p in ps:
+                    ppaths.append(save_photo(p, "temp", nn or f"new{i}", "crew"))
+            if nn and cid and phone:
+                crew_list.append({
+                    "name": nn, "id": cid, "phone": phone, "photos": ppaths
                 })
-    
-    # 6. 航次检查项（带照片预览）
+
+    # 开航检查（含新项）
     st.markdown("### ✅ 开航前检查")
     check_results = []
-    first_sea_flag = False
-    
+    first_sea = False
+
     for item in ALL_CHECK_ITEMS:
-        col1, col2, col3 = st.columns([3, 1, 3])
-        with col1:
-            st.write(f"**{item}**")
-        with col2:
+        st.markdown(f"**{item}**")
+        c1, c2 = st.columns([1,3])
+        res = "合格"
+        with c1:
             if item == "是否有人第一次出海":
-                res = st.selectbox("", ["是", "否"], key=f"check_{item}", index=1, label_visibility="collapsed")
-                first_sea_flag = (res == "是")
-            elif item == "是否有人穿戴拖鞋":
-                res = st.selectbox("", ["是", "否"], key=f"check_{item}", index=0, label_visibility="collapsed")
+                res = st.selectbox("", ["是","否"], key=f"c_{item}", index=1)
+                first_sea = (res == "是")
+            elif item in ["是否有人穿戴拖鞋", "是否已完成人员上船登记"]:
+                res = st.selectbox("", ["是","否"], key=f"c_{item}")
             else:
-                res = st.selectbox("", ["合格", "不合格"], key=f"check_{item}", label_visibility="collapsed")
-        with col3:
+                res = st.selectbox("", ["合格","不合格"], key=f"c_{item}")
+
+        with c2:
             if item in NO_PHOTO_ITEMS + ["是否有人穿戴拖鞋", "是否有人第一次出海"]:
                 st.write("无需上传照片")
-                check_results.append({"item": item, "result": res, "photo": None})
+                check_results.append({"item": item, "result": res, "photos": []})
             else:
-                # 检查项照片上传+预览
-                check_photo = st.file_uploader(
-                    "上传照片",
-                    type=["jpg", "jpeg", "png"],
-                    key=f"check_photo_{item}",
-                    label_visibility="collapsed"
-                )
-                
-                # 实时预览
-                if check_photo:
-                    st.image(
-                        check_photo,
-                        caption="照片预览",
-                        width=80,
-                        use_column_width=False
-                    )
-                
-                check_results.append({"item": item, "result": res, "photo": check_photo})
-    
-    # 7. 首次出海人员信息
-    first_sea_data = []
-    if first_sea_flag:
-        st.markdown("### 🆕 首次出海人员信息")
-        fs_count = st.number_input("首次出海人数", min_value=1, key="fs_count")
-        for i in range(fs_count):
-            col1, col2, col3 = st.columns(3)
-            with col1:
-                fs_name = st.text_input("姓名", key=f"fs_name_{i}")
-            with col2:
-                fs_phone = st.text_input("手机号", key=f"fs_phone_{i}")
-            with col3:
-                fs_id = st.text_input("身份证号", key=f"fs_id_{i}")
-            first_sea_data.append({"name": fs_name, "phone": fs_phone, "id": fs_id})
-    
-    # 8. 提交审批
-    if st.button("📤 提交审批", key="submit_btn", type="primary", use_container_width=True):
-        # 基础校验
-        valid = True
-        
-        # 船员信息校验
-        if not crew_data_list:
-            st.error("❌ 请至少录入1名船员信息")
-            valid = False
-        for idx, crew in enumerate(crew_data_list):
-            if not crew["name"] or not crew["id"] or not crew["phone"]:
-                st.error(f"❌ 船员{idx+1}信息不完整（姓名/身份证/手机号不能为空）")
-                valid = False
-            if len(str(crew["id"]).strip()) != 18:
-                st.error(f"❌ 船员{crew['name']}身份证号格式错误（需18位）")
-                valid = False
-            if len(str(crew["phone"]).strip()) != 11:
-                st.error(f"❌ 船员{crew['name']}手机号格式错误（需11位）")
-                valid = False
-        
-        # 检查项照片校验
-        for check in check_results:
-            if not check["photo"] and check["item"] not in NO_PHOTO_ITEMS + ["是否有人穿戴拖鞋", "是否有人第一次出海"]:
-                st.error(f"❌ {check['item']} 未上传照片，请补充")
-                valid = False
-        
-        # 首次出海人员校验
-        if first_sea_flag:
-            for fs in first_sea_data:
-                if not fs["name"] or not fs["phone"] or not fs["id"]:
-                    st.error("❌ 首次出海人员信息不完整")
-                    valid = False
-        
-        if not valid:
-            return
-        
-        # 生成航次编号
-        voyage_id = generate_voyage_id()
-        submit_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        
-        # 保存航次信息
-        ship_df = read_csv_with_lock(DATA_FILES["ship_info"])
-        new_ship_row = pd.DataFrame({
-            "航次编号": [voyage_id],
-            "船名": [ship_name],
-            "船籍港": [port],
-            "最大载客人数": [max_people],
-            "实际载客人数": [actual_people],
-            "出海任务": [task.strip() if task else ""],
-            "出海携带货物": [cargo.strip() if cargo else ""],
-            "拟计划回港时间": [return_time.strftime("%Y-%m-%d %H:%M:%S")],
-            "出发港": [departure.strip() if departure else ""],
-            "目的港": [destination.strip() if destination else ""],
-            "开航时间": [sail_time.strftime("%Y-%m-%d %H:%M:%S")],
-            "提交时间": [submit_time],
-            "审核状态": ["待审批"],
-            "审核意见": [""]
-        })
-        ship_df = pd.concat([ship_df, new_ship_row], ignore_index=True)
-        write_csv_with_lock(ship_df, DATA_FILES["ship_info"])
-        
-        # 保存船员信息
-        crew_df = read_csv_with_lock(DATA_FILES["crew_info"])
-        new_crew_rows = []
-        for crew in crew_data_list:
-            photo_path = save_photo(crew["photo"], voyage_id, crew["name"])
-            new_crew_rows.append({
-                "航次编号": voyage_id,
-                "船员姓名": crew["name"],
-                "身份证号": encrypt_data(crew["id"]),
-                "手机号": encrypt_data(crew["phone"]),
-                "照片路径": photo_path
-            })
-        crew_df = pd.concat([crew_df, pd.DataFrame(new_crew_rows)], ignore_index=True)
-        write_csv_with_lock(crew_df, DATA_FILES["crew_info"])
-        
-        # 保存检查项信息（核心修复：新增检查项存储逻辑）
-        check_df = read_csv_with_lock(DATA_FILES["check_info"])
-        new_check_rows = []
-        for check in check_results:
-            photo_path = save_photo(check["photo"], voyage_id, check["item"])
-            new_check_rows.append({
-                "航次编号": voyage_id,
-                "检查项名称": check["item"],
-                "检查结果": check["result"],
-                "照片路径": photo_path
-            })
-        check_df = pd.concat([check_df, pd.DataFrame(new_check_rows)], ignore_index=True)
-        write_csv_with_lock(check_df, DATA_FILES["check_info"])
-        
-        # 保存首次出海信息
-        if first_sea_flag:
-            fs_df = read_csv_with_lock(DATA_FILES["first_sea_info"])
-            new_fs_rows = []
-            for fs in first_sea_data:
-                new_fs_rows.append({
-                    "航次编号": voyage_id,
-                    "人数": fs_count,
-                    "姓名": fs["name"],
-                    "电话": encrypt_data(fs["phone"]),
-                    "身份证号": encrypt_data(fs["id"])
+                st.markdown("📷 可传多张照片")
+                uploads = st.file_uploader("", type=["png","jpg"], accept_multiple_files=True, key=f"cu_{item}")
+                temps = []
+                if uploads:
+                    cols = st.columns(4)
+                    for j,p in enumerate(uploads):
+                        with cols[j%4]:
+                            st.image(p, width=80)
+                            temps.append(save_photo(p, "temp", item, "check"))
+                exist_p = get_photo_records("temp", item, "check")
+                for j,p in enumerate(exist_p):
+                    cols = st.columns(4)
+                    with cols[j%4]:
+                        st.image(p, width=80)
+                        if st.button(f"删除照片{j+1}", key=f"del_{item}_{j}"):
+                            delete_photo(p, "temp", item, "check")
+                            st.rerun()
+                check_results.append({
+                    "item": item, "result": res, "photos": temps + exist_p
                 })
-            fs_df = pd.concat([fs_df, pd.DataFrame(new_fs_rows)], ignore_index=True)
+
+    # 首次出海
+    first_data = []
+    if first_sea:
+        st.markdown("### 🆕 首次出海人员")
+        cnt = st.number_input("人数", 1)
+        for i in range(cnt):
+            c1,c2,c3 = st.columns(3)
+            with c1: n = st.text_input("姓名", key=f"f{i}")
+            with c2: p = st.text_input("手机", key=f"fp{i}")
+            with c3: c = st.text_input("身份证", key=f"fc{i}")
+            first_data.append({"name":n,"phone":p,"id":c})
+
+    # 提交
+    if st.button("📤 提交审批", type="primary", use_container_width=True):
+        ok = True
+        if not crew_list:
+            st.error("至少1名船员")
+            ok=False
+        for c in crew_list:
+            if not c["name"] or not c["id"] or len(c["id"])!=18 or len(c["phone"])!=11:
+                st.error(f"船员{c['name']}信息格式错误")
+                ok=False
+        for chk in check_results:
+            if chk["item"] not in NO_PHOTO_ITEMS + ["是否有人穿戴拖鞋", "是否有人第一次出海"] and not chk["photos"]:
+                st.error(f"{chk['item']} 必须上传照片")
+                ok=False
+        if first_sea:
+            for f in first_data:
+                if not f["name"] or not f["phone"] or not f["id"]:
+                    st.error("首次出海信息不完整")
+                    ok=False
+        if not ok:
+            return
+
+        vid = generate_voyage_id()
+        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+        # 保存航次
+        ship_df = read_csv_with_lock(DATA_FILES["ship_info"])
+        new_ship = pd.DataFrame({
+            "航次编号": [vid], "船名": [ship_name], "船籍港": [port],
+            "最大载客人数": [maxp], "实际载客人数": [actual],
+            "出海任务": [task], "出海携带货物": [cargo],
+            "拟计划回港时间": [ret.strftime("%Y-%m-%d %H:%M:%S")],
+            "出发港": [dep], "目的港": [dest],
+            "开航时间": [sail.strftime("%Y-%m-%d %H:%M:%S")],
+            "提交时间": [now], "审核状态": ["待审批"], "审核意见": [""]
+        })
+        ship_df = pd.concat([ship_df, new_ship], ignore_index=True)
+        write_csv_with_lock(ship_df, DATA_FILES["ship_info"])
+
+        # 船员照片
+        cdf = read_csv_with_lock(DATA_FILES["crew_info"])
+        for c in crew_list:
+            nps = []
+            for p in c["photos"]:
+                if p and "temp" in p:
+                    np = p.replace("temp", vid)
+                    os.makedirs(os.path.dirname(np), exist_ok=True)
+                    shutil.move(p, np)
+                    nps.append(np)
+            save_photo_records(vid, c["name"], nps, "crew")
+            cdf = pd.concat([cdf, pd.DataFrame([{
+                "航次编号": vid, "船员姓名": c["name"],
+                "身份证号": encrypt_data(c["id"]),
+                "手机号": encrypt_data(c["phone"]),
+                "照片路径": ",".join(nps)
+            }])], ignore_index=True)
+        write_csv_with_lock(cdf, DATA_FILES["crew_info"])
+
+        # 检查项
+        chk_df = read_csv_with_lock(DATA_FILES["check_info"])
+        for ch in check_results:
+            nps = []
+            for p in ch["photos"]:
+                if p and "temp" in p:
+                    np = p.replace("temp", vid)
+                    os.makedirs(os.path.dirname(np), exist_ok=True)
+                    shutil.move(p, np)
+                    nps.append(np)
+            save_photo_records(vid, ch["item"], nps, "check")
+            chk_df = pd.concat([chk_df, pd.DataFrame([{
+                "航次编号": vid, "检查项名称": ch["item"],
+                "检查结果": ch["result"], "照片路径": ",".join(nps)
+            }])], ignore_index=True)
+        write_csv_with_lock(chk_df, DATA_FILES["check_info"])
+
+        # 首次出海
+        if first_sea and first_data:
+            fs_df = read_csv_with_lock(DATA_FILES["first_sea_info"])
+            rows = []
+            for f in first_data:
+                rows.append({
+                    "航次编号": vid, "人数": len(first_data), "姓名": f["name"],
+                    "电话": encrypt_data(f["phone"]), "身份证号": encrypt_data(f["id"])
+                })
+            fs_df = pd.concat([fs_df, pd.DataFrame(rows)], ignore_index=True)
             write_csv_with_lock(fs_df, DATA_FILES["first_sea_info"])
-        
-        # 新增船员同步到主名单
-        add_crew(ship_name, crew_data_list)
-        
-        # 提交成功提示
+
+        add_crew(ship_name, crew_list)
+
         st.success(f"""
-        🎉 航次提交成功！
-        - 航次编号：{voyage_id}
-        - 船舶名称：{ship_name}
-        - 提交时间：{submit_time}
-        - 当前状态：待审批
-        
-        请等待管理员审批后执行开航任务！
+🎉 提交成功！
+航次编号：{vid}
+船舶：{ship_name}
+当前状态：待审批
+请等待管理员审批后执行开航任务！
         """)
         st.balloons()
 
-# ====================== 航次查询模块（新增驳回理由展示） ======================
+# ====================== 查询 ======================
 def ship_voyage_query():
     st.subheader("🔍 航次查询")
-    ship_df = read_csv_with_lock(DATA_FILES["ship_info"])
-    all_voyages = ship_df["航次编号"].tolist()
-    
-    if not all_voyages:
-        st.info("📭 暂无航次记录")
+    df = read_csv_with_lock(DATA_FILES["ship_info"])
+    if df.empty:
+        st.info("无记录")
         return
-    
-    selected_voyage = st.selectbox("选择航次编号", all_voyages, key="selected_voyage")
-    voyage_info = ship_df[ship_df["航次编号"] == selected_voyage].iloc[0]
-    
-    # 航次基本信息
-    st.markdown(f"### 📋 航次详情：{selected_voyage}")
-    col1, col2, col3 = st.columns(3)
-    with col1:
-        st.write(f"**船舶名称**：{voyage_info['船名']}")
-        st.write(f"**船籍港**：{voyage_info['船籍港']}")
-        st.write(f"**最大载客人数**：{voyage_info['最大载客人数']}")
-        st.write(f"**实际载客人数**：{voyage_info['实际载客人数']}")
-    with col2:
-        st.write(f"**出海任务**：{voyage_info['出海任务']}")
-        st.write(f"**出海携带货物**：{voyage_info['出海携带货物']}")
-        st.write(f"**出发港**：{voyage_info['出发港']}")
-        st.write(f"**目的港**：{voyage_info['目的港']}")
-    with col3:
-        st.write(f"**开航时间**：{voyage_info['开航时间']}")
-        st.write(f"**拟计划回港时间**：{voyage_info['拟计划回港时间']}")
-        st.write(f"**提交时间**：{voyage_info['提交时间']}")
-        # 显示审核状态+驳回理由
-        status = voyage_info['审核状态']
-        st.write(f"**审核状态**：{status}")
-        opinion = voyage_info['审核意见']
-        if opinion and status == "驳回":
-            st.error(f"**驳回理由**：{opinion}")
-        elif opinion and status == "通过":
-            st.success(f"**审批意见**：{opinion}")
-    
-    # 检查项信息展示（核心修复）
-    st.markdown("### ✅ 开航前检查结果")
-    check_df = read_csv_with_lock(DATA_FILES["check_info"])
-    check_info = check_df[check_df["航次编号"] == selected_voyage]
-    
-    if check_info.empty:
-        st.info("暂无检查项记录")
-    else:
-        for _, check in check_info.iterrows():
-            col1, col2, col3 = st.columns([3, 1, 2])
-            with col1:
-                st.write(f"**{check['检查项名称']}**")
-            with col2:
-                if check['检查结果'] == "合格" or check['检查结果'] == "否":
-                    st.success(check['检查结果'])
-                else:
-                    st.error(check['检查结果'])
-            with col3:
-                if pd.notna(check["照片路径"]) and os.path.exists(check["照片路径"]):
-                    st.image(
-                        check["照片路径"],
-                        caption="检查照片",
-                        width=80,
-                        use_column_width=False
-                    )
-    
-    # 船员信息（带照片预览）
-    st.markdown("### 👨‍✈️ 船员信息")
-    crew_df = read_csv_with_lock(DATA_FILES["crew_info"])
-    crew_info = crew_df[crew_df["航次编号"] == selected_voyage]
-    
-    for _, crew in crew_info.iterrows():
-        col1, col2, col3, col4 = st.columns([2, 3, 3, 2])
-        with col1:
-            st.write(f"**{crew['船员姓名']}**")
-        with col2:
-            st.write(f"身份证：{desensitize_id(crew['身份证号'])}")
-        with col3:
-            st.write(f"手机号：{desensitize_phone(crew['手机号'])}")
-        with col4:
-            if pd.notna(crew["照片路径"]) and os.path.exists(crew["照片路径"]):
-                st.image(
-                    crew["照片路径"],
-                    caption=f"{crew['船员姓名']} 照片",
-                    width=100,
-                    use_column_width=False
-                )
+    vid = st.selectbox("选择航次", df["航次编号"])
+    info = df[df["航次编号"]==vid].iloc[0]
 
-# ====================== 后台审批模块（新增检查项展示） ======================
+    st.markdown(f"### 📋 {vid}")
+    c1,c2,c3 = st.columns(3)
+    with c1:
+        st.write(f"船名：{info['船名']}")
+        st.write(f"船籍港：{info['船籍港']}")
+        st.write(f"载客：{info['实际载客人数']}/{info['最大载客人数']}")
+    with c2:
+        st.write(f"任务：{info['出海任务']}")
+        st.write(f"出发：{info['出发港']} → {info['目的港']}")
+    with c3:
+        st.write(f"开航：{info['开航时间']}")
+        st.write(f"状态：{info['审核状态']}")
+        if info["审核意见"]:
+            if info["审核状态"] == "驳回":
+                st.error(f"理由：{info['审核意见']}")
+            else:
+                st.success(f"意见：{info['审核意见']}")
+
+    st.markdown("### ✅ 检查项")
+    ckdf = read_csv_with_lock(DATA_FILES["check_info"])
+    ck = ckdf[ckdf["航次编号"]==vid]
+    for _, r in ck.iterrows():
+        st.markdown(f"**{r['检查项名称']}**")
+        if r["检查结果"] in ["合格","否"]:
+            st.success(r["检查结果"])
+        else:
+            st.error(r["检查结果"])
+        paths = r["照片路径"].split(",") if pd.notna(r["照片路径"]) else []
+        cols = st.columns(4)
+        for i,p in enumerate(paths):
+            if p and os.path.exists(p):
+                with cols[i%4]:
+                    st.image(p, width=80)
+
+    st.markdown("### 👨‍✈️ 船员")
+    cdf = read_csv_with_lock(DATA_FILES["crew_info"])
+    for _, r in cdf[cdf["航次编号"]==vid].iterrows():
+        st.markdown(f"**{r['船员姓名']}**")
+        st.write(f"身份证：{desensitize_id(r['身份证号'])}  手机：{desensitize_phone(r['手机号'])}")
+        paths = r["照片路径"].split(",") if pd.notna(r["照片路径"]) else []
+        cols = st.columns(4)
+        for i,p in enumerate(paths):
+            if p and os.path.exists(p):
+                with cols[i%4]:
+                    st.image(p, width=80)
+
+# ====================== 审批 ======================
 def admin_approval():
     st.subheader("📋 后台审批")
-    
-    # 权限验证
-    if "show_full_info" not in st.session_state:
-        st.session_state["show_full_info"] = False
-    
-    st.sidebar.subheader("🔒 权限验证")
-    pwd = st.sidebar.text_input("管理员密码", type="password", key="admin_pwd")
-    if st.sidebar.button("验证", use_container_width=True):
+    if "show_full" not in st.session_state:
+        st.session_state.show_full = False
+
+    pwd = st.sidebar.text_input("管理员密码", type="password")
+    if st.sidebar.button("验证"):
         if pwd == "admin123":
-            st.session_state["show_full_info"] = True
-            st.sidebar.success("✅ 验证成功")
+            st.session_state.show_full = True
+            st.sidebar.success("✅ 已验证")
         else:
-            st.session_state["show_full_info"] = False
-            st.sidebar.error("❌ 密码错误")
-    
-    # 待审批航次
-    ship_df = read_csv_with_lock(DATA_FILES["ship_info"])
-    pending_voyages = ship_df[ship_df["审核状态"] == "待审批"]
-    
-    if pending_voyages.empty:
-        st.info("📭 暂无待审批航次")
+            st.sidebar.error("密码错误")
+
+    df = read_csv_with_lock(DATA_FILES["ship_info"])
+    pending = df[df["审核状态"]=="待审批"]
+    if pending.empty:
+        st.info("无待审批")
         return
-    
-    selected_voyage = st.selectbox("选择待审批航次", pending_voyages["航次编号"], key="admin_voyage")
-    voyage_info = pending_voyages[pending_voyages["航次编号"] == selected_voyage].iloc[0]
-    
-    # 航次信息展示
-    st.markdown(f"### 📋 航次详情：{selected_voyage}")
-    col1, col2, col3 = st.columns(3)
-    with col1:
-        st.write(f"**船舶名称**：{voyage_info['船名']}")
-        st.write(f"**船籍港**：{voyage_info['船籍港']}")
-        st.write(f"**最大载客人数**：{voyage_info['最大载客人数']}")
-        st.write(f"**实际载客人数**：{voyage_info['实际载客人数']}")
-    with col2:
-        st.write(f"**出海任务**：{voyage_info['出海任务']}")
-        st.write(f"**出海携带货物**：{voyage_info['出海携带货物']}")
-        st.write(f"**出发港**：{voyage_info['出发港']}")
-        st.write(f"**目的港**：{voyage_info['目的港']}")
-    with col3:
-        st.write(f"**开航时间**：{voyage_info['开航时间']}")
-        st.write(f"**拟计划回港时间**：{voyage_info['拟计划回港时间']}")
-        st.write(f"**提交时间**：{voyage_info['提交时间']}")
-    
-    # 检查项信息展示（核心修复：审批页显示所有检查项）
-    st.markdown("### ✅ 开航前检查结果")
-    check_df = read_csv_with_lock(DATA_FILES["check_info"])
-    check_info = check_df[check_df["航次编号"] == selected_voyage]
-    
-    if check_info.empty:
-        st.info("暂无检查项记录")
-    else:
-        for _, check in check_info.iterrows():
-            col1, col2, col3 = st.columns([3, 1, 2])
-            with col1:
-                st.write(f"**{check['检查项名称']}**")
-            with col2:
-                if check['检查结果'] == "合格" or check['检查结果'] == "否":
-                    st.success(check['检查结果'])
-                else:
-                    st.error(check['检查结果'])
-            with col3:
-                if pd.notna(check["照片路径"]) and os.path.exists(check["照片路径"]):
-                    st.image(
-                        check["照片路径"],
-                        caption="检查照片",
-                        width=80,
-                        use_column_width=False
-                    )
-    
-    # 船员信息（带完整照片预览）
-    st.markdown("### 👨‍✈️ 船员信息")
-    crew_df = read_csv_with_lock(DATA_FILES["crew_info"])
-    crew_info = crew_df[crew_df["航次编号"] == selected_voyage]
-    crew_master_df = get_crew_list(voyage_info['船名'])
-    
-    for _, crew in crew_info.iterrows():
-        col1, col2, col3, col4 = st.columns([2, 3, 3, 2])
-        with col1:
-            st.write(f"**{crew['船员姓名']}**")
-        with col2:
-            if st.session_state["show_full_info"]:
-                match = crew_master_df[crew_master_df["船员姓名"] == crew["船员姓名"]]
-                st.write(f"身份证：**{match.iloc[0]['身份证号'] if not match.empty else desensitize_id(crew['身份证号'])}**")
-            else:
-                st.write(f"身份证：{desensitize_id(crew['身份证号'])}")
-        with col3:
-            if st.session_state["show_full_info"]:
-                match = crew_master_df[crew_master_df["船员姓名"] == crew["船员姓名"]]
-                st.write(f"手机号：**{match.iloc[0]['手机号'] if not match.empty else desensitize_phone(crew['手机号'])}**")
-            else:
-                st.write(f"手机号：{desensitize_phone(crew['手机号'])}")
-        with col4:
-            if pd.notna(crew["照片路径"]) and os.path.exists(crew["照片路径"]):
-                st.image(
-                    crew["照片路径"],
-                    caption=f"{crew['船员姓名']} 照片",
-                    width=100,
-                    use_column_width=False
-                )
-    
-    # 审批操作
-    st.markdown("### ✅ 审批操作")
-    action = st.radio("审批结果", ["通过", "驳回"], key="approval_action")
-    opinion = st.text_area("审批意见/驳回理由", key="approval_opinion", placeholder="请输入审批意见（必填）")
-    
-    if st.button("确认审批", key="confirm_approval", type="primary", use_container_width=True):
+
+    vid = st.selectbox("选择航次", pending["航次编号"])
+    info = pending[pending["航次编号"]==vid].iloc[0]
+
+    st.markdown(f"### {vid}")
+    c1,c2,c3 = st.columns(3)
+    with c1:
+        st.write(f"船名：{info['船名']}")
+        st.write(f"载客：{info['实际载客人数']}/{info['最大载客人数']}")
+    with c2:
+        st.write(f"任务：{info['出海任务']}")
+        st.write(f"路线：{info['出发港']} → {info['目的港']}")
+    with c3:
+        st.write(f"提交：{info['提交时间']}")
+
+    # 检查项
+    st.markdown("### ✅ 检查项")
+    ckdf = read_csv_with_lock(DATA_FILES["check_info"])
+    for _, r in ckdf[ckdf["航次编号"]==vid].iterrows():
+        st.markdown(f"**{r['检查项名称']}**")
+        if r["检查结果"] in ["合格","否"]:
+            st.success(r["检查结果"])
+        else:
+            st.error(r["检查结果"])
+        paths = r["照片路径"].split(",") if pd.notna(r["照片路径"]) else []
+        cols = st.columns(4)
+        for i,p in enumerate(paths):
+            if p and os.path.exists(p):
+                with cols[i%4]:
+                    st.image(p, width=80)
+
+    # 船员
+    st.markdown("### 👨‍✈️ 船员")
+    cdf = read_csv_with_lock(DATA_FILES["crew_info"])
+    crew_master = get_crew_list(info["船名"])
+    for _, r in cdf[cdf["航次编号"]==vid].iterrows():
+        st.markdown(f"**{r['船员姓名']}**")
+        if st.session_state.show_full:
+            match = crew_master[crew_master["船员姓名"]==r["船员姓名"]]
+            cid = match.iloc[0]["身份证号"] if not match.empty else desensitize_id(r["身份证号"])
+            phone = match.iloc[0]["手机号"] if not match.empty else desensitize_phone(r["手机号"])
+            st.write(f"身份证：{cid}   手机：{phone}")
+        else:
+            st.write(f"身份证：{desensitize_id(r['身份证号'])}   手机：{desensitize_phone(r['手机号'])}")
+        paths = r["照片路径"].split(",") if pd.notna(r["照片路径"]) else []
+        cols = st.columns(4)
+        for i,p in enumerate(paths):
+            if p and os.path.exists(p):
+                with cols[i%4]:
+                    st.image(p, width=80)
+
+    # 审批
+    st.markdown("### 审批")
+    act = st.radio("结果", ["通过","驳回"])
+    opinion = st.text_area("意见/理由")
+    if st.button("确认审批", type="primary", use_container_width=True):
         if not opinion:
-            st.error("❌ 审批意见不能为空")
+            st.error("请填写意见")
             return
-        
-        # 更新航次状态和审批意见
-        ship_df.loc[ship_df["航次编号"] == selected_voyage, "审核状态"] = action
-        ship_df.loc[ship_df["航次编号"] == selected_voyage, "审核意见"] = opinion
-        write_csv_with_lock(ship_df, DATA_FILES["ship_info"])
-        
-        # 记录审批日志
-        approval_df = read_csv_with_lock(DATA_FILES["approval_info"])
-        approval_df = pd.concat([approval_df, pd.DataFrame({
-            "航次编号": [selected_voyage],
-            "审核人": ["管理员"],
-            "审核时间": [datetime.now().strftime("%Y-%m-%d %H:%M:%S")],
-            "审核状态": [action],
-            "审核意见": [opinion]
-        })], ignore_index=True)
-        write_csv_with_lock(approval_df, DATA_FILES["approval_info"])
-        
-        st.success(f"🎉 航次{selected_voyage}审批完成！状态：{action}")
+        df.loc[df["航次编号"]==vid, "审核状态"] = act
+        df.loc[df["航次编号"]==vid, "审核意见"] = opinion
+        write_csv_with_lock(df, DATA_FILES["ship_info"])
+
+        # 日志
+        log = read_csv_with_lock(DATA_FILES["approval_info"])
+        log = pd.concat([log, pd.DataFrame([{
+            "航次编号": vid, "审核人": "管理员", "审核时间": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "审核状态": act, "审核意见": opinion
+        }])], ignore_index=True)
+        write_csv_with_lock(log, DATA_FILES["approval_info"])
+
+        st.success(f"✅ {vid} 已{act}")
         st.rerun()
 
 # ====================== 主程序 ======================
 def main():
-    st.cache_data.clear()
-    
-    # 初始化会话状态
     if "logged_in" not in st.session_state:
-        st.session_state["logged_in"] = False
-    
-    # 登录验证
-    if not st.session_state["logged_in"]:
+        st.session_state.logged_in = False
+
+    if not st.session_state.logged_in:
         login_module()
         return
-    
-    # 主界面
+
     st.title("🚢 船舶航次审批系统")
-    
-    if st.session_state["role"] == "ship":
-        tab1, tab2 = st.tabs(["📝 航次录入", "🔍 航次查询"])
-        with tab1:
-            ship_info_input()
-        with tab2:
-            ship_voyage_query()
+    if st.session_state.role == "ship":
+        t1, t2 = st.tabs(["📝 航次录入", "🔍 航次查询"])
+        with t1: ship_info_input()
+        with t2: ship_voyage_query()
     else:
         admin_approval()
-    
-    # 退出登录
-    if st.sidebar.button("🚪 退出登录", use_container_width=True):
-        st.session_state["logged_in"] = False
-        st.session_state.pop("preview_photos", None)
-        st.session_state.pop("show_full_info", None)
+
+    if st.sidebar.button("🚪 退出登录"):
+        st.session_state.logged_in = False
         st.rerun()
 
 if __name__ == "__main__":
