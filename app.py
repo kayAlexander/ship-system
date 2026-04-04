@@ -544,28 +544,17 @@ def ship_voyage_query():
 
 # ====================== 审批日志生成 ======================
 def generate_approval_pdf(voyage_id):
-    """生成航次审批日志PDF（修复中文显示 + 格式完整）"""
+    """生成航次审批日志PDF（使用内置中文字体，永不报错 TTFError）"""
     from reportlab.pdfbase import pdfmetrics
-    from reportlab.pdfbase.ttfonts import TTFont
+    from reportlab.pdfbase.cidfonts import UnicodeCIDFont
     from reportlab.lib.fonts import addMapping
     import os
+    import tempfile
 
-    # 👇 核心修复：注册支持中文的字体（系统自带，无需安装）
-    try:
-        # Windows 系统字体
-        if os.name == 'nt':
-            font_path = "C:/Windows/Fonts/simsun.ttc"
-        # Linux 服务器字体
-        else:
-            font_path = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
-
-        pdfmetrics.registerFont(TTFont('ChineseFont', font_path))
-    except:
-        # 兜底字体
-        pdfmetrics.registerFont(TTFont('ChineseFont', 'Helvetica'))
-
-    addMapping('ChineseFont', 0, 0, 'ChineseFont')
-    addMapping('ChineseFont', 1, 0, 'ChineseFont')
+    # ====================== 🔥 终极方案：内置中文字体，不需要任何外部 TTF 文件！======================
+    # 这行代码直接解决 TTFError，不管本地/云端都 100% 运行
+    pdfmetrics.registerFont(UnicodeCIDFont('STSong-Light'))
+    CHINESE_FONT = 'STSong-Light'
 
     # 获取航次基础信息
     ship_df = read_csv_with_lock(DATA_FILES["ship_info"])
@@ -589,11 +578,12 @@ def generate_approval_pdf(voyage_id):
     styles = getSampleStyleSheet()
     elements = []
 
-    # 标题（强制中文字体）
+    # 标题
     title_style = ParagraphStyle(
         'CustomTitle',
         parent=styles['Heading1'],
-        fontName='ChineseFont',
+        fontName=CHINESE_FONT,
+        fontSize=16,
         alignment=1,
         spaceAfter=30,
         textColor=colors.darkblue
@@ -604,7 +594,9 @@ def generate_approval_pdf(voyage_id):
     normal_style = ParagraphStyle(
         'NormalCN',
         parent=styles['Normal'],
-        fontName='ChineseFont'
+        fontName=CHINESE_FONT,
+        fontSize=11,
+        leading=14
     )
     elements.append(Paragraph("一、航次基础信息", normal_style))
 
@@ -626,7 +618,7 @@ def generate_approval_pdf(voyage_id):
         ('BACKGROUND', (0, 0), (0, -1), colors.lightblue),
         ('TEXTCOLOR', (0, 0), (-1, -1), colors.black),
         ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
-        ('FONTNAME', (0, 0), (-1, -1), 'ChineseFont'),
+        ('FONTNAME', (0, 0), (-1, -1), CHINESE_FONT),
         ('FONTSIZE', (0, 0), (-1, -1), 10),
         ('BOTTOMPADDING', (0, 0), (-1, -1), 6),
         ('GRID', (0, 0), (-1, -1), 1, colors.black)
@@ -648,7 +640,7 @@ def generate_approval_pdf(voyage_id):
             ('BACKGROUND', (0, 0), (0, -1), colors.lightgreen),
             ('TEXTCOLOR', (0, 0), (-1, -1), colors.black),
             ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
-            ('FONTNAME', (0, 0), (-1, -1), 'ChineseFont'),
+            ('FONTNAME', (0, 0), (-1, -1), CHINESE_FONT),
             ('FONTSIZE', (0, 0), (-1, -1), 10),
             ('BOTTOMPADDING', (0, 0), (-1, -1), 6),
             ('GRID', (0, 0), (-1, -1), 1, colors.black)
@@ -670,7 +662,7 @@ def generate_approval_pdf(voyage_id):
         ('BACKGROUND', (0, 0), (-1, 0), colors.lightyellow),
         ('TEXTCOLOR', (0, 0), (-1, -1), colors.black),
         ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
-        ('FONTNAME', (0, 0), (-1, -1), 'ChineseFont'),
+        ('FONTNAME', (0, 0), (-1, -1), CHINESE_FONT),
         ('FONTSIZE', (0, 0), (-1, -1), 10),
         ('BOTTOMPADDING', (0, 0), (-1, -1), 6),
         ('GRID', (0, 0), (-1, -1), 1, colors.black)
@@ -691,7 +683,7 @@ def generate_approval_pdf(voyage_id):
         ('BACKGROUND', (0, 0), (-1, 0), colors.lightcoral),
         ('TEXTCOLOR', (0, 0), (-1, -1), colors.black),
         ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
-        ('FONTNAME', (0, 0), (-1, -1), 'ChineseFont'),
+        ('FONTNAME', (0, 0), (-1, -1), CHINESE_FONT),
         ('FONTSIZE', (0, 0), (-1, -1), 10),
         ('BOTTOMPADDING', (0, 0), (-1, -1), 6),
         ('GRID', (0, 0), (-1, -1), 1, colors.black)
