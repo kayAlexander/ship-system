@@ -9,6 +9,12 @@ from dotenv import load_dotenv
 import uuid
 import time
 import json
+from reportlab.lib.pagesizes import A4
+from reportlab.pdfgen import canvas
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
+from reportlab.lib import colors
+import tempfile
 
 # ====================== 基础配置 ======================
 load_dotenv()
@@ -536,28 +542,198 @@ def ship_voyage_query():
                 with cols[i%4]:
                     st.image(p, width=80)
 
-# ====================== 审批 ======================
+# ====================== 审批日志生成 ======================
+def generate_approval_pdf(voyage_id):
+    """生成航次审批日志PDF（修复中文显示 + 格式完整）"""
+    from reportlab.pdfbase import pdfmetrics
+    from reportlab.pdfbase.ttfonts import TTFont
+    from reportlab.lib.fonts import addMapping
+    import os
+
+    # 👇 核心修复：注册支持中文的字体（系统自带，无需安装）
+    try:
+        # Windows 系统字体
+        if os.name == 'nt':
+            font_path = "C:/Windows/Fonts/simsun.ttc"
+        # Linux 服务器字体
+        else:
+            font_path = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
+
+        pdfmetrics.registerFont(TTFont('ChineseFont', font_path))
+    except:
+        # 兜底字体
+        pdfmetrics.registerFont(TTFont('ChineseFont', 'Helvetica'))
+
+    addMapping('ChineseFont', 0, 0, 'ChineseFont')
+    addMapping('ChineseFont', 1, 0, 'ChineseFont')
+
+    # 获取航次基础信息
+    ship_df = read_csv_with_lock(DATA_FILES["ship_info"])
+    ship_info = ship_df[ship_df["航次编号"] == voyage_id].iloc[0]
+
+    # 获取审批信息
+    approval_df = read_csv_with_lock(DATA_FILES["approval_info"])
+    approval_info = approval_df[approval_df["航次编号"] == voyage_id].iloc[0] if not approval_df[approval_df["航次编号"] == voyage_id].empty else None
+
+    # 获取船员信息
+    crew_df = read_csv_with_lock(DATA_FILES["crew_info"])
+    crew_info = crew_df[crew_df["航次编号"] == voyage_id]
+
+    # 获取检查项信息
+    check_df = read_csv_with_lock(DATA_FILES["check_info"])
+    check_info = check_df[check_df["航次编号"] == voyage_id]
+
+    # 创建临时PDF文件
+    temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".pdf")
+    doc = SimpleDocTemplate(temp_file.name, pagesize=A4)
+    styles = getSampleStyleSheet()
+    elements = []
+
+    # 标题（强制中文字体）
+    title_style = ParagraphStyle(
+        'CustomTitle',
+        parent=styles['Heading1'],
+        fontName='ChineseFont',
+        alignment=1,
+        spaceAfter=30,
+        textColor=colors.darkblue
+    )
+    elements.append(Paragraph(f"船舶航次审批日志 - {voyage_id}", title_style))
+
+    # 航次基础信息
+    normal_style = ParagraphStyle(
+        'NormalCN',
+        parent=styles['Normal'],
+        fontName='ChineseFont'
+    )
+    elements.append(Paragraph("一、航次基础信息", normal_style))
+
+    ship_data = [
+        ["船名", ship_info.get("船名", "")],
+        ["船籍港", ship_info.get("船籍港", "")],
+        ["最大载客人数", str(ship_info.get("最大载客人数", ""))],
+        ["实际载客人数", str(ship_info.get("实际载客人数", ""))],
+        ["出海任务", ship_info.get("出海任务", "")],
+        ["携带货物", ship_info.get("出海携带货物", "")],
+        ["出发港", ship_info.get("出发港", "")],
+        ["目的港", ship_info.get("目的港", "")],
+        ["计划开航时间", ship_info.get("开航时间", "")],
+        ["计划回港时间", ship_info.get("拟计划回港时间", "")],
+        ["提交时间", ship_info.get("提交时间", "")]
+    ]
+    ship_table = Table(ship_data, colWidths=[150, 400])
+    ship_table.setStyle(TableStyle([
+        ('BACKGROUND', (0, 0), (0, -1), colors.lightblue),
+        ('TEXTCOLOR', (0, 0), (-1, -1), colors.black),
+        ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
+        ('FONTNAME', (0, 0), (-1, -1), 'ChineseFont'),
+        ('FONTSIZE', (0, 0), (-1, -1), 10),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 6),
+        ('GRID', (0, 0), (-1, -1), 1, colors.black)
+    ]))
+    elements.append(ship_table)
+    elements.append(Spacer(1, 20))
+
+    # 审批信息
+    if approval_info is not None:
+        elements.append(Paragraph("二、审批信息", normal_style))
+        approval_data = [
+            ["审核人", approval_info.get("审核人", "")],
+            ["审核时间", approval_info.get("审核时间", "")],
+            ["审核状态", approval_info.get("审核状态", "")],
+            ["审核意见", approval_info.get("审核意见", "")]
+        ]
+        approval_table = Table(approval_data, colWidths=[150, 400])
+        approval_table.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (0, -1), colors.lightgreen),
+            ('TEXTCOLOR', (0, 0), (-1, -1), colors.black),
+            ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
+            ('FONTNAME', (0, 0), (-1, -1), 'ChineseFont'),
+            ('FONTSIZE', (0, 0), (-1, -1), 10),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 6),
+            ('GRID', (0, 0), (-1, -1), 1, colors.black)
+        ]))
+        elements.append(approval_table)
+        elements.append(Spacer(1, 20))
+
+    # 船员信息
+    elements.append(Paragraph("三、船员信息", normal_style))
+    crew_data = [["姓名", "身份证号（脱敏）", "手机号（脱敏）"]]
+    for _, row in crew_info.iterrows():
+        crew_data.append([
+            row.get("船员姓名", ""),
+            desensitize_id(row.get("身份证号", "")),
+            desensitize_phone(row.get("手机号", ""))
+        ])
+    crew_table = Table(crew_data, colWidths=[100, 200, 200])
+    crew_table.setStyle(TableStyle([
+        ('BACKGROUND', (0, 0), (-1, 0), colors.lightyellow),
+        ('TEXTCOLOR', (0, 0), (-1, -1), colors.black),
+        ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
+        ('FONTNAME', (0, 0), (-1, -1), 'ChineseFont'),
+        ('FONTSIZE', (0, 0), (-1, -1), 10),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 6),
+        ('GRID', (0, 0), (-1, -1), 1, colors.black)
+    ]))
+    elements.append(crew_table)
+    elements.append(Spacer(1, 20))
+
+    # 检查项信息
+    elements.append(Paragraph("四、开航前检查", normal_style))
+    check_data = [["检查项", "检查结果"]]
+    for _, row in check_info.iterrows():
+        check_data.append([
+            row.get("检查项名称", ""),
+            row.get("检查结果", "")
+        ])
+    check_table = Table(check_data, colWidths=[300, 200])
+    check_table.setStyle(TableStyle([
+        ('BACKGROUND', (0, 0), (-1, 0), colors.lightcoral),
+        ('TEXTCOLOR', (0, 0), (-1, -1), colors.black),
+        ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
+        ('FONTNAME', (0, 0), (-1, -1), 'ChineseFont'),
+        ('FONTSIZE', (0, 0), (-1, -1), 10),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 6),
+        ('GRID', (0, 0), (-1, -1), 1, colors.black)
+    ]))
+    elements.append(check_table)
+
+    # 生成PDF
+    doc.build(elements)
+    return temp_file.name
+
+# ====================== 审批（含已审批查询+高清照片） ======================
 def admin_approval():
-    st.subheader("📋 后台审批")
+    st.subheader("📋 后台审批管理")
+    
+    # 切换待审批/已审批
+    view_mode = st.radio("查看模式", ["待审批航次", "已审批航次"], key="view_mode")
+    
     if "show_full" not in st.session_state:
         st.session_state.show_full = False
 
     pwd = st.sidebar.text_input("管理员密码", type="password")
     if st.sidebar.button("验证"):
-        if pwd == "admin123":
+        if pwd == "Admin@2026#123":  # 统一管理员密码
             st.session_state.show_full = True
             st.sidebar.success("✅ 已验证")
         else:
             st.sidebar.error("密码错误")
 
     df = read_csv_with_lock(DATA_FILES["ship_info"])
-    pending = df[df["审核状态"]=="待审批"]
-    if pending.empty:
-        st.info("无待审批")
+    
+    # 筛选航次
+    if view_mode == "待审批航次":
+        target_df = df[df["审核状态"]=="待审批"]
+    else:
+        target_df = df[df["审核状态"].isin(["通过", "驳回"])]
+    
+    if target_df.empty:
+        st.info(f"无{view_mode}记录")
         return
 
-    vid = st.selectbox("选择航次", pending["航次编号"])
-    info = pending[pending["航次编号"]==vid].iloc[0]
+    vid = st.selectbox("选择航次", target_df["航次编号"])
+    info = target_df[target_df["航次编号"]==vid].iloc[0]
 
     st.markdown(f"### {vid}")
     c1,c2,c3 = st.columns(3)
@@ -569,8 +745,11 @@ def admin_approval():
         st.write(f"路线：{info['出发港']} → {info['目的港']}")
     with c3:
         st.write(f"提交：{info['提交时间']}")
+        st.write(f"状态：{info['审核状态']}")
+        if info["审核意见"]:
+            st.write(f"意见：{info['审核意见']}")
 
-    # 检查项
+    # 检查项（高清照片）
     st.markdown("### ✅ 检查项")
     ckdf = read_csv_with_lock(DATA_FILES["check_info"])
     for _, r in ckdf[ckdf["航次编号"]==vid].iterrows():
@@ -579,14 +758,28 @@ def admin_approval():
             st.success(r["检查结果"])
         else:
             st.error(r["检查结果"])
+        
+        # 高清照片展示
         paths = r["照片路径"].split(",") if pd.notna(r["照片路径"]) else []
-        cols = st.columns(4)
-        for i,p in enumerate(paths):
-            if p and os.path.exists(p):
-                with cols[i%4]:
-                    st.image(p, width=80)
+        if paths and paths[0]:
+            # 主照片（高清）
+            main_photo = paths[0]
+            if os.path.exists(main_photo):
+                st.image(main_photo, caption=f"{r['检查项名称']} - 高清原图", use_column_width=True)
+            
+            # 其他照片（缩略图+高清查看）
+            if len(paths) > 1:
+                st.markdown("#### 其他照片")
+                cols = st.columns(4)
+                for i,p in enumerate(paths[1:]):
+                    if p and os.path.exists(p):
+                        with cols[i%4]:
+                            st.image(p, width=80)
+                            # 高清查看按钮
+                            if st.button(f"查看高清{i+1}", key=f"hd_{r['检查项名称']}_{i}"):
+                                st.image(p, caption=f"高清照片{i+1}", use_column_width=True)
 
-    # 船员
+    # 船员（高清照片）
     st.markdown("### 👨‍✈️ 船员")
     cdf = read_csv_with_lock(DATA_FILES["crew_info"])
     crew_master = get_crew_list(info["船名"])
@@ -599,35 +792,66 @@ def admin_approval():
             st.write(f"身份证：{cid}   手机：{phone}")
         else:
             st.write(f"身份证：{desensitize_id(r['身份证号'])}   手机：{desensitize_phone(r['手机号'])}")
+        
+        # 高清照片展示
         paths = r["照片路径"].split(",") if pd.notna(r["照片路径"]) else []
-        cols = st.columns(4)
-        for i,p in enumerate(paths):
-            if p and os.path.exists(p):
-                with cols[i%4]:
-                    st.image(p, width=80)
+        if paths and paths[0]:
+            main_photo = paths[0]
+            if os.path.exists(main_photo):
+                st.image(main_photo, caption=f"{r['船员姓名']} - 高清原图", use_column_width=True)
+            
+            if len(paths) > 1:
+                st.markdown("#### 其他照片")
+                cols = st.columns(4)
+                for i,p in enumerate(paths[1:]):
+                    if p and os.path.exists(p):
+                        with cols[i%4]:
+                            st.image(p, width=80)
+                            if st.button(f"查看高清{i+1}", key=f"hd_crew_{r['船员姓名']}_{i}"):
+                                st.image(p, caption=f"高清照片{i+1}", use_column_width=True)
 
-    # 审批
-    st.markdown("### 审批")
-    act = st.radio("结果", ["通过","驳回"])
-    opinion = st.text_area("意见/理由")
-    if st.button("确认审批", type="primary", use_container_width=True):
-        if not opinion:
-            st.error("请填写意见")
-            return
-        df.loc[df["航次编号"]==vid, "审核状态"] = act
-        df.loc[df["航次编号"]==vid, "审核意见"] = opinion
-        write_csv_with_lock(df, DATA_FILES["ship_info"])
+    # 审批操作（仅待审批航次显示）
+    if view_mode == "待审批航次":
+        st.markdown("### 审批操作")
+        act = st.radio("审批结果", ["通过","驳回"], key=f"approval_{vid}")
+        opinion = st.text_area("审批意见/理由", key=f"opinion_{vid}")
+        if st.button("确认审批", type="primary", use_container_width=True):
+            if not opinion:
+                st.error("请填写审批意见")
+                return
+            
+            # 更新航次状态
+            df.loc[df["航次编号"]==vid, "审核状态"] = act
+            df["审核意见"] = df["审核意见"].astype(object)
+            df.loc[df["航次编号"]==vid, "审核意见"] = opinion
+            write_csv_with_lock(df, DATA_FILES["ship_info"])
 
-        # 日志
-        log = read_csv_with_lock(DATA_FILES["approval_info"])
-        log = pd.concat([log, pd.DataFrame([{
-            "航次编号": vid, "审核人": "管理员", "审核时间": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            "审核状态": act, "审核意见": opinion
-        }])], ignore_index=True)
-        write_csv_with_lock(log, DATA_FILES["approval_info"])
+            # 记录审批日志
+            log = read_csv_with_lock(DATA_FILES["approval_info"])
+            log = pd.concat([log, pd.DataFrame([{
+                "航次编号": vid, "审核人": "管理员", "审核时间": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                "审核状态": act, "审核意见": opinion
+            }])], ignore_index=True)
+            write_csv_with_lock(log, DATA_FILES["approval_info"])
 
-        st.success(f"✅ {vid} 已{act}")
-        st.rerun()
+            st.success(f"✅ {vid} 已{act}")
+            st.rerun()
+    
+    # 生成审批日志PDF（所有航次都可生成）
+    st.markdown("### 日志管理")
+    if st.button("📄 生成审批日志PDF", use_container_width=True):
+        with st.spinner("正在生成PDF..."):
+            pdf_path = generate_approval_pdf(vid)
+            with open(pdf_path, "rb") as f:
+                st.download_button(
+                    label="下载审批日志",
+                    data=f,
+                    file_name=f"{vid}_审批日志.pdf",
+                    mime="application/pdf",
+                    use_container_width=True
+                )
+        os.unlink(pdf_path)  # 删除临时文件
+        st.success("PDF生成完成！")
 
 # ====================== 主程序 ======================
 def main():
