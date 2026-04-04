@@ -3,3 +3,4 @@ pandas
 filelock
 python-dotenv
 uuid
+reportlab
